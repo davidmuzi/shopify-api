@@ -7,12 +7,12 @@
 
 import Foundation
 
-struct Customer: Decodable {
-	var id: Int?
-	let email: String
-	let acceptsMarketing: Bool
-	let firstName: String
-	let lastName: String?
+public struct Customer: Decodable {
+	public var id: Int?
+	public let email: String
+	public let acceptsMarketing: Bool
+	public let firstName: String
+	public let lastName: String?
 	
 	enum CodingKeys: String, CodingKey {
 		case email
