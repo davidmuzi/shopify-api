@@ -6,30 +6,40 @@
 //
 
 import XCTest
-import Shopify
+@testable import Shopify
 
 class ShopifyTests: XCTestCase {
 
-	let token = ProcessInfo.processInfo.environment["token"]!
-	let domain = ProcessInfo.processInfo.environment["domain"]!
-
-	var session: ShopifyAPI.URLSession!
+	var api: ShopifyAPI.URLSession!
 	
 	override func setUp() {
-		session = ShopifyAPI.URLSession(token: token, domain: domain)
+		api = ShopifyAPI.URLSession(token: "token", domain: "myshop.myshopify.com")
 	}
 	
-	func testGetProducts() {
-
-		let expected = expectation(description: "")
+	func testJSONDecodingToCoreDataObject() {
 		
-		session.get(resource: Products.self) { result in
-			XCTAssertGreaterThan(result!.products.count, 0)
-			result!.products.forEach { XCTAssertGreaterThan($0.id!, 0) }
-			expected.fulfill()
+		// Create mock session
+		let session = URLSessionMock()
+		let json = """
+		{
+		   "products":[
+			  {
+				 "title":"Mug"
+			  },
+			  {
+				 "title":"Cup"
+			  }
+		   ]
 		}
+		"""
+		session.data = json.data(using: .utf8)
 		
-		waitForExpectations(timeout: 5, handler: nil)
+		let api = ShopifyAPI.URLSession(token: "token", domain: "domain", session: session)
+
+		api.get(resource: Products.self) { result in
+			XCTAssertEqual("Mug", result!.products.first!.title)
+			XCTAssertEqual("Cup", result!.products.last!.title)
+		}
 	}
 	
 	func testQueryItem() {
@@ -37,33 +47,46 @@ class ShopifyTests: XCTestCase {
 			.addQuery(.limit(5))
 			.addQuery(.page(2))
 		
-		let expected = expectation(description: "")
-		
-		session.get(query: items) { (result) in
-			XCTAssertEqual(5, result?.contents.count)
-			expected.fulfill()
-		}
-		
-		waitForExpectations(timeout: 5, handler: nil)
+		let api = ShopifyAPI.URLSession(token: "token", domain: "myshop.myshopify.com")
+
+		let url = api.makeUrl(query: items)
+		XCTAssertEqual(URL(string: "https://myshop.myshopify.com/admin/products.json?limit=5&page=2"), url)
 	}
 	
-	func testOrderQueryItem() {
+	func testOrdersQuery() {
 		let items = QueryBuilder<Orders>()
-			.addQuery(.limit(5))
-			.addQuery(.page(2))
+			.addQuery(.limit(3))
+			.addQuery(.status(.closed))
 		
-		let expected = expectation(description: "")
+		let api = ShopifyAPI.URLSession(token: "token", domain: "myshop.myshopify.com")
 		
-		session.get(query: items) { (result) in
-			XCTAssertEqual(5, result?.contents.count)
-			expected.fulfill()
-		}
-		
-		waitForExpectations(timeout: 5, handler: nil)
+		let url = api.makeUrl(query: items)
+		XCTAssertEqual(URL(string: "https://myshop.myshopify.com/admin/orders.json?limit=3&status=closed"), url)
 	}
 	
+	func testDeleteWebHook() {
+		
+		let session = URLSessionMock()
+		session.requestClosure = { request in
+			XCTAssertEqual(URL(string: "https://myshop.myshopify.com/admin/webhooks/3.json"), request.url)
+			XCTAssertEqual(request.httpMethod, "DELETE")
+		}
+		
+		let api = ShopifyAPI.URLSession(token: "token", domain: "myshop.myshopify.com", session: session)
+		let hook = Webhook(topic: "order-create", address: "https://example.com/order", id: 3)
+		try! api.delete(resource: hook, callback: { _ in })
+	}
+	
+	func testWebhookQuery() {
+		let items = QueryBuilder<Webhooks>()
+			.addQuery(.limit(10))
+		
+		let url = api.makeUrl(query: items)
+		XCTAssertEqual(URL(string: "https://myshop.myshopify.com/admin/webhooks.json?limit=10"), url)
+	}
+	
+	@available(OSX 10.12, *)
 	func testMarketingEvent() {
-		let expected = expectation(description: "")
 		
 		let marketingEvent = MarketingEvent(
 			id: nil,
@@ -74,63 +97,35 @@ class ShopifyTests: XCTestCase {
 			startedAt: Date()
 		)
 		
-		try! session.post(resource: marketingEvent) { (resource) in
-			XCTAssertNotEqual(resource?.id, 0)
-			expected.fulfill()
+		let session = URLSessionMock()
+		session.requestClosure = { request in
+			XCTAssertEqual(URL(string: "https://myshop.myshopify.com/admin/marketing_events.json"), request.url)
+			XCTAssertEqual("POST", request.httpMethod)
+			
+			let encoder = JSONEncoder()
+			encoder.dateEncodingStrategy = .iso8601
+			
+			XCTAssertEqual(try! encoder.encode(["marketing_event": marketingEvent]), request.httpBody)
 		}
 		
-		waitForExpectations(timeout: 5, handler: nil)
-		
+		let api = ShopifyAPI.URLSession(token: "token", domain: "myshop.myshopify.com", session: session)
+		try! api.post(resource: marketingEvent, callback: { _ in })
 	}
 	
 	func testCreateWebhook() {
-		let expected = expectation(description: "")
 		
 		let webhook = Webhook(topic: "customers/update", address: "https://www.ngrok.com/webhook/customer_update")
 		
-		try! session.post(resource: webhook, callback: { (resource) in
-			XCTAssertNotEqual(resource!.id, 0)
-			expected.fulfill()
-		})
-		
-		waitForExpectations(timeout: 15, handler: nil)
-		
-	}
-	
-	func testGetWebhooks() {
-		let items = QueryBuilder<Webhooks>()
-			.addQuery(.limit(10))
-		
-		let expected = expectation(description: "")
-		
-		session.get(query: items) { (result) in
-			XCTAssertEqual(1, result?.contents.count)
-			expected.fulfill()
+		let session = URLSessionMock()
+		session.requestClosure = { request in
+			XCTAssertEqual(URL(string: "https://myshop.myshopify.com/admin/webhooks.json"), request.url)
+			XCTAssertEqual("POST", request.httpMethod)
+			XCTAssertEqual(try! JSONEncoder().encode(["webhook": webhook]), request.httpBody)
 		}
 		
-		waitForExpectations(timeout: 5, handler: nil)
+		let api = ShopifyAPI.URLSession(token: "token", domain: "myshop.myshopify.com", session: session)
+		
+		try! api.post(resource: webhook, callback: { _ in })
+		
 	}
-	
-	func testDeleteWebHook() {
-		let items = QueryBuilder<Webhooks>()
-			.addQuery(.limit(11))
-		
-		let expected = expectation(description: "")
-		
-		session.get(query: items) { (result) in
-			
-			let hook: Webhook = result!.contents.first!
-			
-			try! self.session.delete(resource: hook, callback: { error in
-				
-				XCTAssertNil(error)
-				expected.fulfill()
-				
-			})
-			
-		}
-		
-		waitForExpectations(timeout: 15, handler: nil)
-	}
-
 }

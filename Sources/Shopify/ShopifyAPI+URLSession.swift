@@ -14,21 +14,29 @@ extension ShopifyAPI {
 		private let session: Foundation.URLSession
 		private let host: URL
 		
-		public init(token: String, domain: String) {
+		public init(token: String, domain: String, session: Foundation.URLSession? = nil) {
 			
-			let config = URLSessionConfiguration.default
-			config.httpAdditionalHeaders = ["X-Shopify-Access-Token": token,
-											"Content-Type": "application/json; charset=utf-8"]
-			self.session = Foundation.URLSession(configuration: config)
-			
+			if let session = session {
+				self.session = session
+			} else {
+				let config = URLSessionConfiguration.default
+				config.httpAdditionalHeaders = ["X-Shopify-Access-Token": token,
+												"Content-Type": "application/json; charset=utf-8"]
+				self.session = Foundation.URLSession(configuration: config)
+			}
 			self.host = URL(string: "https://\(domain)/admin/")!
 		}
 
 		public func get<Q: QueryBuilder<R>, R: ResourceContainer>(query: Q, callback: @escaping (Q.Resource?) -> Void) where R: Decodable {
+			let url = makeUrl(query: query)
+			decodeResource(url: url, callback: callback)
+		}
+		
+		func makeUrl<Q: QueryBuilder<R>, R: ResourceContainer>(query: Q) -> URL {
 			let url = host.appendingPathComponent(Q.Resource.Resource.path).appendingPathExtension("json")
 			var components = URLComponents(url: url, resolvingAgainstBaseURL: false)!
 			components.queryItems = query.queryItems()
-			decodeResource(url: components.url!, callback: callback)
+			return components.url!
 		}
 		
 		public func get<R: ResourceContainer>(resource: R.Type, callback: @escaping (R?) -> Void) where R: Decodable {
@@ -37,8 +45,7 @@ extension ShopifyAPI {
 		}
 		
 		public func post<R: Codable & ShopifyCreatableResource>(resource: R, callback: @escaping (R?) -> Void) throws {
-			let url = host.appendingPathComponent(R.path)
-				.appendingPathExtension("json")
+			let url = host.appendingPathComponent(R.path).appendingPathExtension("json")
 
 			var request = URLRequest(url: url)
 			request.httpMethod = "POST"
@@ -46,8 +53,6 @@ extension ShopifyAPI {
 			let encoder = JSONEncoder()
 			if #available(OSX 10.12, *) {
 				encoder.dateEncodingStrategy = .iso8601
-			} else {
-				// Fallback on earlier versions
 			}
 			
 			request.httpBody = try encoder.encode([R.identifier: resource])
@@ -59,8 +64,6 @@ extension ShopifyAPI {
 				let decoder = JSONDecoder()
 				if #available(OSX 10.12, *) {
 					decoder.dateDecodingStrategy = .iso8601
-				} else {
-					// Fallback on earlier versions
 				}
 				
 				if let contained = try? decoder.decode(Container.self, from: data), let contents = contained[R.identifier] {
